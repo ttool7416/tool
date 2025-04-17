@@ -1,0 +1,192 @@
+plugins {
+	id 'java'
+	id 'c'
+	id "com.diffplug.spotless" version "6.6.1"
+}
+
+group 'org.zlab'
+version '1.0-SNAPSHOT'
+
+// java {
+// 	toolchain {
+// 		languageVersion = JavaLanguageVersion.of(11)
+// 	}
+// }
+
+repositories {
+	mavenCentral()
+	maven { url "https://jitpack.io" }
+	maven { url "https://artifactory.cronapp.io/public-release/" }
+}
+
+dependencies {
+	compile 'commons-cli:commons-cli:1.5.0'
+	implementation group: 'org.apache.commons', name: 'commons-lang3', version: '3.12.0'
+	implementation group: 'org.apache.maven.reporting', name: 'maven-reporting-api', version: '3.0'
+	implementation 'org.apache.logging.log4j:log4j-api:2.17.2'
+	implementation 'org.apache.logging.log4j:log4j-core:2.17.2'
+	implementation 'com.fasterxml.jackson.core:jackson-databind:2.13.3'
+	implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.13.3'
+	implementation group: 'commons-io', name: 'commons-io', version: '2.11.0'
+	implementation 'org.apache.commons:commons-text:1.9'
+	implementation files('lib/ssgFatJar.jar')
+	// implementation files('lib/org.jacoco.core.jar')
+	implementation 'com.google.code.gson:gson-extras:2.8.5'
+	implementation 'com.google.code.gson:gson:2.9.0'
+	implementation group: 'com.googlecode.json-simple', name: 'json-simple', version: '1.1.1'
+	implementation 'info.debatty:java-string-similarity:2.0.0'
+	implementation 'com.github.hanke580.jacoco:jacoco:1c01d8328d'
+	implementation 'org.codehaus.plexus:plexus-utils:1.5.12'
+
+	testImplementation 'org.junit.jupiter:junit-jupiter-api:5.6.0'
+	testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.6.0'
+}
+
+test {
+	useJUnitPlatform()
+	testLogging {
+		showExceptions true
+		showStackTraces true
+		showCauses true
+		exceptionFormat "full"
+		outputs.upToDateWhen {false}
+		showStandardStreams = true
+	}
+}
+
+task copyDependencies(type: Copy) {
+	from configurations.default
+	into 'dependencies'
+}
+
+sourceSets {
+	main {
+		java {
+			srcDirs 'src/main/java'
+			include '**/*.java'
+			exclude 'src/main/java/nyx'
+			include 'src/main/java/nyx/LibnyxInterface.java'
+		}
+		// c {
+		// 	source {
+		// 		srcDirs 'src/main/c'
+		// 		include '**/*.c'
+		// 	}
+		// 	exportedHeaders {
+		// 		srcDirs 'src/main/c'
+		// 		include '**/*.h'
+		// 	}
+		// }
+		resources {
+			exclude 'cassandra/**/cassandra'
+			exclude 'hadoop/**/hadoop'
+		}
+	}
+	miniClient {
+		java {
+			srcDirs 'src/main/java'
+			include '**/*.java'
+			exclude 'src/main/java/fuzzingengine/Main.java'
+		}
+		resources {
+			exclude 'cassandra/**/cassandra'
+			exclude 'hadoop/**/hadoop'
+		}
+	}
+}
+
+jar {
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    manifest {
+		archiveName = "MiniClient.jar"
+        attributes 'Main-Class': 'org.zlab.upfuzz.nyx.MiniClientMain'
+    }
+}
+
+task compileCAgent(type: Exec) {
+    workingDir 'src/main/c/custom_agent'
+    commandLine 'gcc', '-DNO_PT_NYX', '-static', "-I$rootDir/nyx_mode", "nyx_agent.c", '-o', "$buildDir/libs/c_agent"
+}
+
+//tasks.build.dependsOn(compileCAgent)
+
+// task copyNativeLibs(type: Copy) {
+//     from 'src/main/resources'
+//     into "$buildDir/libs"
+//     include '**/*.so'
+// }
+
+// run the build script during a gradle build
+task runJNIbuildScript(type: Exec) {
+	commandLine 'sh', 'bin/compile_JNI_c.sh', "$buildDir/libs"
+}
+
+//tasks.build.dependsOn(runJNIbuildScript)
+
+// task compileJni(type: Exec) {
+//     commandLine 'gcc', '-shared', '-fPIC', sourceSets.main.c.files.collect{it.absolutePath}, '-o', 'build/libs/libnyxJNI.so'
+// }
+
+// build for nyx mode
+task nyxBuild {
+	dependsOn compileCAgent, runJNIbuildScript
+}
+
+task compileMavenProject() {
+	// exec {
+	// 	workingDir "../jacoco/"
+	// 	commandLine "/usr/bin/mvn", "-f", "org.jacoco.build/pom.xml", "spotless:apply"
+	// }
+	// exec {
+	// 	workingDir "../jacoco/"
+	// 	commandLine "/usr/bin/mvn", "clean", "install", "-DskipTests"
+	// }
+	// mvn -f org.jacoco.build/pom.xml spotless:apply; mvn clean compile -DskipTests
+}
+
+task downloadMavenDependencies(type: Exec) {
+	workingDir "../jacoco/"
+	commandLine "/usr/bin/mvn", "dependency:copy-dependencies", "-DoutputDirectory=target/libs"
+}
+
+spotless {
+	// optional: limit format enforcement to just the files changed by this feature branch
+	ratchetFrom 'origin/main'
+
+	format 'misc', {
+		// define the files to apply `misc` to
+		target '*.gradle', '*.md', '.gitignore'
+
+		// define the steps to apply to those files
+		trimTrailingWhitespace()
+		// indentWithTabs() // or spaces. Takes an integer argument if you don't like 4
+		endWithNewline()
+	}
+
+
+	java {
+		// clangFormat('13.0.1')
+		eclipse().configFile(".settings/org.eclipse.jdt.core.prefs")
+	}
+}
+
+task analyzeTestGraph(type: JavaExec) {
+	mainClass.set('org.zlab.upfuzz.fuzzingengine.server.testanalyzer.TestGraph')
+	classpath = sourceSets.main.runtimeClasspath
+}
+
+task printNode(type: JavaExec) {
+	mainClass.set('org.zlab.upfuzz.fuzzingengine.server.testtracker.BaseNode')
+	classpath = sourceSets.main.runtimeClasspath
+
+	// Use the filename property directly if available
+	args findProperty("filename") ?: ""
+}
+
+task analyze(type: JavaExec) {
+	mainClass.set('org.zlab.upfuzz.fuzzingengine.server.testanalyzer.Analyzer')
+	classpath = sourceSets.main.runtimeClasspath
+
+	// Use the filename property directly if available
+	args findProperty("mode") ?: ""
+}
