@@ -1,4 +1,4 @@
-# comptester
+# Tool
 
 > A tool to detect upgrade bugs of distributed systems
 
